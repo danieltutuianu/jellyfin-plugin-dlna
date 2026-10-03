@@ -11,6 +11,7 @@ using Jellyfin.Plugin.Dlna.ContentDirectory;
 using Jellyfin.Plugin.Dlna.Extensions;
 using Jellyfin.Plugin.Dlna.Localization;
 using Jellyfin.Plugin.Dlna.Model;
+using Jellyfin.Plugin.Dlna.Playback;
 using MediaBrowser.Controller.Channels;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Entities;
@@ -273,17 +274,28 @@ public class DidlBuilder
     {
         if (streamInfo is not null)
         {
+            if (item.MediaType == MediaType.Video)
+            {
+                var existingSources = _mediaSourceManager.GetStaticMediaSources(item, true, _user).ToArray();
+                var browseMediaSource = existingSources.FirstOrDefault(s => s.IsInfiniteStream)
+                    ?? existingSources.FirstOrDefault()
+                    ?? streamInfo.MediaSource;
+                DlnaStreamRequestAdjustments.ApplyBrowseSubtitlePreferences(streamInfo, browseMediaSource);
+            }
+
             return streamInfo;
         }
 
         try
         {
             var sources = _mediaSourceManager.GetStaticMediaSources(item, true, _user);
+            var mediaSources = sources.ToArray();
+            var browseMediaSource = mediaSources.FirstOrDefault(s => s.IsInfiniteStream) ?? mediaSources.FirstOrDefault();
 
             var options = new MediaOptions
             {
                 ItemId = item.Id,
-                MediaSources = sources.ToArray(),
+                MediaSources = mediaSources,
                 Profile = _profile,
                 DeviceId = deviceId
             };
@@ -309,6 +321,11 @@ public class DidlBuilder
                 options.EnableDirectStream = false;
 
                 resolved = isAudio ? builder.GetOptimalAudioStream(options) : builder.GetOptimalVideoStream(options);
+            }
+
+            if (resolved is not null && !isAudio)
+            {
+                DlnaStreamRequestAdjustments.ApplyBrowseSubtitlePreferences(resolved, browseMediaSource);
             }
 
             return resolved;
@@ -374,6 +391,11 @@ public class DidlBuilder
         foreach (var contentFeature in contentFeatureList)
         {
             AddVideoResource(writer, filter, contentFeature, streamInfo);
+        }
+
+        if (!DlnaPluginConfigurationAccessor.EnableSubtitleBurnIn)
+        {
+            return;
         }
 
         var subtitleProfiles = streamInfo.GetSubtitleProfiles(_mediaEncoder, false, _serverAddress, _accessToken);
