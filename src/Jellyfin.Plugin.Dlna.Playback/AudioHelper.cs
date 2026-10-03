@@ -175,6 +175,7 @@ public class AudioHelper
             isHeadRequest,
             _httpContextAccessor.HttpContext,
             _transcodeManager,
+            _mediaSourceManager,
             ffmpegCommandLineArguments,
             transcodingJobType,
             cancellationTokenSource).ConfigureAwait(false);
