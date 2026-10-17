@@ -223,6 +223,9 @@ public static class StreamingHelpers
 
         try
         {
+        mediaSource = await ProbeLiveSourceWhenVideoSizeIsUnknown(mediaSource, mediaEncoder, cancellationToken)
+            .ConfigureAwait(false);
+
         var encodingOptions = serverConfigurationManager.GetEncodingOptions();
 
         encodingHelper.AttachMediaSourceInfo(state, encodingOptions, mediaSource, url);
@@ -952,6 +955,51 @@ public static class StreamingHelpers
         }
 
         return container;
+    }
+
+    /// <summary>
+    /// A cached live probe can report 0×0 before the HEVC parameter sets arrive.
+    /// Probe the open stream again and keep the result only when it has a real size.
+    /// </summary>
+    /// <param name="mediaSource">The opened live source, if any.</param>
+    /// <param name="mediaEncoder">The encoder used to probe the stream.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The same source, updated when the second probe has a real video size.</returns>
+    private static async Task<MediaSourceInfo?> ProbeLiveSourceWhenVideoSizeIsUnknown(
+        MediaSourceInfo? mediaSource,
+        IMediaEncoder mediaEncoder,
+        CancellationToken cancellationToken)
+    {
+        if (!DlnaStreamRequestAdjustments.NeedsFreshLiveProbe(mediaSource) || mediaSource is null)
+        {
+            return mediaSource;
+        }
+
+        var previousAnalyzeDuration = mediaSource.AnalyzeDurationMs;
+        mediaSource.AnalyzeDurationMs = Math.Max(previousAnalyzeDuration ?? 0, DlnaStreamRequestAdjustments.LiveReprobeAnalyzeDurationMs);
+        try
+        {
+            var probed = await mediaEncoder.GetMediaInfo(
+                new MediaInfoRequest
+                {
+                    MediaSource = mediaSource,
+                    ExtractChapters = false,
+                    MediaType = DlnaProfileType.Video
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            DlnaStreamRequestAdjustments.TryApplyProbedLiveMediaInfo(mediaSource, probed);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Playback continues with the original probe when the second read fails.
+        }
+        finally
+        {
+            mediaSource.AnalyzeDurationMs = previousAnalyzeDuration;
+        }
+
+        return mediaSource;
     }
 
     private static Jellyfin.Database.Implementations.Entities.User? GetDefaultDlnaUser(IUserManager userManager)
